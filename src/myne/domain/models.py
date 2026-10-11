@@ -12,7 +12,7 @@ CurrencyCode = Annotated[
     str, StringConstraints(strip_whitespace=True, to_upper=True, pattern=r"^[A-Za-z]{3}$")
 ]
 Confidence = Annotated[float, Field(ge=0.0, le=1.0)]
-OptionalLabel = Annotated[str | None, StringConstraints(strip_whitespace=True, max_length=80)]
+OptionalLabel = Annotated[str | None, StringConstraints(strip_whitespace=True, max_length=120)]
 
 
 class Condition(StrEnum):
@@ -63,6 +63,7 @@ class BagAttributes(BaseModel):
     material: str | None
     color: str | None
     hardware: str | None
+    apparent_condition: str | None
     distinctive_features: list[str]
     visible_text: list[str]
     confidence: float
@@ -77,20 +78,40 @@ class BagIdentity(BaseModel):
     material: OptionalLabel = Field(default=None, examples=["Togo leather"])
     color: OptionalLabel = Field(default=None, examples=["Gold"])
     hardware: OptionalLabel = Field(default=None, examples=["Gold hardware"])
+    construction: OptionalLabel = Field(default=None, examples=["Sellier"])
+    variant: OptionalLabel = Field(default=None, examples=["Himalaya"])
 
     @property
     def display_name(self) -> str:
-        return dedupe_words(" ".join(p for p in (self.brand, self.model, self.size) if p))
+        parts = (self.brand, self.model, self.size, self.variant)
+        return dedupe_words(" ".join(p for p in parts if p))
 
     def search_query(self) -> str:
         return self.display_name
 
     def descriptive_query(self) -> str:
-        parts = (self.brand, self.model, self.size, self.material, self.color)
+        parts = (
+            self.brand,
+            self.model,
+            self.size,
+            self.variant,
+            self.construction,
+            self.material,
+            self.color,
+        )
         return dedupe_words(" ".join(p for p in parts if p))
 
     def cache_key(self) -> str:
-        fields = (self.brand, self.model, self.size, self.material, self.color, self.hardware)
+        fields = (
+            self.brand,
+            self.model,
+            self.size,
+            self.material,
+            self.color,
+            self.hardware,
+            self.construction,
+            self.variant,
+        )
         return "|".join(normalize_text(f or "") for f in fields)
 
 
@@ -178,8 +199,33 @@ class PriceReport(BaseModel):
     warnings: list[str]
 
 
-class Appraisal(BaseModel):
-    identification: IdentificationResult
-    prices: PriceReport | None = Field(
-        description="Null when identification needs user confirmation before pricing."
+class ValuationBasis(StrEnum):
+    CONDITION = "condition"
+    ALL_CONDITIONS = "all_conditions"
+    RETAIL = "retail"
+    NONE = "none"
+
+
+class Valuation(BaseModel):
+    condition: Condition
+    basis: ValuationBasis = Field(
+        description="Which listings the estimate is derived from, most to least specific."
     )
+    currency: CurrencyCode
+    estimate: PriceStats | None
+    purchase_price: Amount | None
+    gain: Amount | None = Field(description="Median estimate minus purchase price.")
+    gain_percent: float | None
+
+
+class BagAppraisal(BaseModel):
+    bag: BagIdentity
+    valuation: Valuation
+    report: PriceReport
+
+
+class ImageAppraisal(BaseModel):
+    identification: IdentificationResult
+    bag: BagIdentity | None = Field(description="Top candidate that was priced, if any.")
+    valuation: Valuation | None
+    report: PriceReport | None
