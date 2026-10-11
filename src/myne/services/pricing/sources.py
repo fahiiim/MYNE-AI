@@ -15,6 +15,7 @@ class PriceQuery:
     identity: BagIdentity
     window: DateWindow
     today: date
+    search_query: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,7 +62,7 @@ class GoogleShoppingSource:
         self._serpapi = serpapi
 
     async def collect(self, query: PriceQuery) -> list[RawPrice]:
-        listings = await self._serpapi.google_shopping(query.identity.search_query())
+        listings = await self._serpapi.google_shopping(query.search_query)
         return _live_prices(self.name, listings, query.today)
 
 
@@ -72,7 +73,7 @@ class EbayListingsSource:
         self._serpapi = serpapi
 
     async def collect(self, query: PriceQuery) -> list[RawPrice]:
-        listings = await self._serpapi.ebay(query.identity.search_query())
+        listings = await self._serpapi.ebay(query.search_query)
         return _live_prices(self.name, listings, query.today)
 
 
@@ -83,5 +84,5 @@ class SerperShoppingSource:
         self._serper = serper
 
     async def collect(self, query: PriceQuery) -> list[RawPrice]:
-        listings = await self._serper.shopping(query.identity.search_query())
+        listings = await self._serper.shopping(query.search_query)
         return _live_prices(self.name, listings, query.today)
