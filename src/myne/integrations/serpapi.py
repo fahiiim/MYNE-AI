@@ -46,16 +46,20 @@ class SerpApiClient:
             raise UpstreamServiceError(self._SERVICE, "image upload returned no image_id")
         return image_id
 
-    async def google_lens(self, *, image_id: str, search_type: str = "all") -> list[LensMatch]:
-        payload = await self._search(
-            "google_lens",
-            {
-                "image_id": image_id,
-                "type": search_type,
-                "hl": self._language,
-                "country": self._country,
-            },
-        )
+    async def google_lens(
+        self,
+        *,
+        image_id: str | None = None,
+        image_url: str | None = None,
+        query: str | None = None,
+    ) -> list[LensMatch]:
+        if (image_id is None) == (image_url is None):
+            raise ValueError("Provide exactly one of image_id or image_url")
+        params: dict[str, Any] = {"type": "all", "hl": self._language, "country": self._country}
+        params.update({"image_id": image_id} if image_id else {"url": image_url})
+        if query:
+            params["q"] = query
+        payload = await self._search("google_lens", params)
         return [
             LensMatch(
                 title=item["title"],
