@@ -17,6 +17,18 @@ class InvalidImageError(MyneError):
     title = "Invalid image"
 
 
+class InvalidImageUrlError(MyneError):
+    status_code = 422
+    code = "invalid_image_url"
+    title = "Invalid image URL"
+
+
+class ImageFetchError(MyneError):
+    status_code = 422
+    code = "image_unreachable"
+    title = "Image could not be downloaded"
+
+
 class UnsupportedMediaTypeError(MyneError):
     status_code = 415
     code = "unsupported_media_type"
