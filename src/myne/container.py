@@ -17,11 +17,11 @@ from myne.core.errors import ConfigurationError
 from myne.core.http import HttpClient
 from myne.domain.money import currency_for_country
 from myne.integrations.google_vision import GoogleVisionClient
+from myne.integrations.image_fetcher import ImageFetcher
 from myne.integrations.serpapi import SerpApiClient
 from myne.integrations.serper import SerperClient
 from myne.integrations.wayback import WaybackClient
-from myne.services.appraisal import AppraisalService
-from myne.services.contracts import BagIdentificationService, PriceReportService
+from myne.services.appraisal import BagAppraisalService
 from myne.services.identification import BagIdentifier, IdentificationPolicy
 from myne.services.images import ImagePreprocessor
 from myne.services.pricing.fx import FrankfurterFx
@@ -43,9 +43,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True, slots=True)
 class Container:
     settings: Settings
-    identifier: BagIdentificationService
-    prices: PriceReportService
-    appraisals: AppraisalService
+    appraisals: BagAppraisalService
     integrations: Mapping[str, bool]
 
 
@@ -84,7 +82,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
 
         identifier = BagIdentifier(
             llm=llm,
-            preprocessor=ImagePreprocessor(max_upload_bytes=settings.max_upload_bytes),
+            preprocessor=ImagePreprocessor(max_upload_bytes=settings.max_image_bytes),
             policy=IdentificationPolicy(
                 auto_confirm_confidence=settings.auto_confirm_confidence,
                 auto_confirm_margin=settings.auto_confirm_margin,
@@ -110,11 +108,19 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
         }
         logger.info("Container ready", extra={"ctx": {"llm": llm.name, **integrations}})
 
+        images = ImageFetcher(
+            raw_http,
+            max_bytes=settings.max_image_bytes,
+            timeout_seconds=settings.image_fetch_timeout_seconds,
+        )
         yield Container(
             settings=settings,
-            identifier=identifier,
-            prices=prices,
-            appraisals=AppraisalService(identifier=identifier, prices=prices),
+            appraisals=BagAppraisalService(
+                images=images,
+                identifier=identifier,
+                prices=prices,
+                currency=settings.default_currency,
+            ),
             integrations=integrations,
         )
 
