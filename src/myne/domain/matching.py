@@ -20,9 +20,9 @@ _DIGITS = re.compile(r"\d+")
 class ListingMatcher:
     """Decides whether a marketplace title refers to the identified bag.
 
-    Brand and every model token must match; a missing size downgrades the match to
-    PARTIAL rather than rejecting it, so the price service can fall back when
-    exact-variant listings are scarce.
+    Brand and every model token must match. Missing qualifiers (size, construction,
+    special variant) downgrade the match to PARTIAL rather than rejecting it, so the
+    price service can fall back when exact-variant listings are scarce.
     """
 
     def __init__(self, identity: BagIdentity) -> None:
@@ -38,7 +38,15 @@ class ListingMatcher:
         self._exclusions = tuple(
             phrase for phrase in _EXCLUSION_PHRASES if not contains_phrase(model_text, phrase)
         )
-        self._size_variants = _size_variants(identity.size)
+        self._qualifiers = tuple(
+            spellings
+            for spellings in (
+                _size_variants(identity.size),
+                _phrase_variants(identity.construction),
+                _phrase_variants(identity.variant),
+            )
+            if spellings
+        )
 
     def evaluate(self, title: str) -> MatchQuality | None:
         text = normalize_text(title)
@@ -48,9 +56,15 @@ class ListingMatcher:
             return None
         if any(contains_phrase(text, phrase) for phrase in self._exclusions):
             return None
-        if self._size_variants and not any(contains_phrase(text, v) for v in self._size_variants):
-            return MatchQuality.PARTIAL
+        for spellings in self._qualifiers:
+            if not any(contains_phrase(text, spelling) for spelling in spellings):
+                return MatchQuality.PARTIAL
         return MatchQuality.EXACT
+
+
+def _phrase_variants(value: str | None) -> tuple[str, ...]:
+    text = normalize_text(value or "")
+    return (text,) if text else ()
 
 
 def _size_variants(size: str | None) -> tuple[str, ...]:
