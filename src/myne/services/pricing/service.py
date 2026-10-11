@@ -23,6 +23,7 @@ from myne.domain.models import (
 )
 from myne.domain.money import quantize
 from myne.domain.stats import summarize
+from myne.domain.text import normalize_text
 from myne.services.pricing.fx import CurrencyConverter
 from myne.services.pricing.sources import PriceQuery, PriceSource, RawPrice
 from myne.services.pricing.window import DateWindow, month_key
@@ -69,21 +70,25 @@ class MarketPriceService:
             ttl_seconds=policy.cache_ttl_seconds, max_entries=512
         )
 
-    async def report(self, identity: BagIdentity, *, currency: str) -> PriceReport:
-        key = f"{identity.cache_key()}|{currency}"
+    async def report(
+        self, identity: BagIdentity, *, currency: str, search_query: str | None = None
+    ) -> PriceReport:
+        query_text = (search_query or "").strip() or identity.search_query()
+        key = f"{identity.cache_key()}|{currency}|{normalize_text(query_text)}"
         if (cached := self._cache.get(key)) is not None:
             return cached
-        report = await self._build(identity, currency)
+        report = await self._build(identity, currency, query_text)
         if any(status.ok for status in report.sources):
             self._cache.set(key, report)
         return report
 
-    async def _build(self, identity: BagIdentity, currency: str) -> PriceReport:
+    async def _build(self, identity: BagIdentity, currency: str, query_text: str) -> PriceReport:
         now = self._clock()
         query = PriceQuery(
             identity=identity,
             window=DateWindow.trailing_months(now.date(), self._policy.history_months),
             today=now.date(),
+            search_query=query_text,
         )
         outcomes = await asyncio.gather(*(self._collect(s, query) for s in self._sources))
 
