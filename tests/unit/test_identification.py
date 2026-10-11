@@ -3,8 +3,10 @@ import pytest
 from myne.ai.schemas import CandidateRanking, RankedCandidate
 from myne.core.errors import InvalidImageError
 from myne.domain.models import BagAttributes
+from myne.services.contracts import IdentificationRequest
 from myne.services.identification import BagIdentifier, IdentificationPolicy
 from myne.services.images import ImagePreprocessor
+from myne.services.progress import IdentificationStage
 from tests.fakes import ScriptedLLM
 
 
@@ -17,6 +19,7 @@ def _attributes(*, brand: str | None = "Hermès", is_handbag: bool = True) -> Ba
         material="Togo",
         color="Gold",
         hardware="Gold",
+        apparent_condition="excellent",
         distinctive_features=["turn-lock", "padlock"],
         visible_text=["HERMES PARIS"],
         confidence=1.4,
@@ -59,7 +62,20 @@ async def test_uncited_and_uncorroborated_candidates_are_penalized(jpeg_bytes: b
         }
     )
 
-    result = await _identifier(llm).identify(jpeg_bytes, notes="bought in Paris")
+    stages: list[IdentificationStage] = []
+
+    async def record(stage: IdentificationStage, payload: dict[str, object]) -> None:
+        stages.append(stage)
+
+    result = await _identifier(llm).identify(
+        IdentificationRequest(image=jpeg_bytes, notes="bought in Paris"), progress=record
+    )
+
+    assert stages == [
+        IdentificationStage.ATTRIBUTES_EXTRACTED,
+        IdentificationStage.EVIDENCE_COLLECTED,
+        IdentificationStage.CANDIDATES_RANKED,
+    ]
 
     assert [c.identity.brand for c in result.candidates] == ["Hermès", "Gucci"]
     hermes, gucci = result.candidates
@@ -73,7 +89,7 @@ async def test_uncited_and_uncorroborated_candidates_are_penalized(jpeg_bytes: b
 async def test_non_handbag_short_circuits_before_ranking(jpeg_bytes: bytes) -> None:
     llm = ScriptedLLM({BagAttributes: _attributes(brand=None, is_handbag=False)})
 
-    result = await _identifier(llm).identify(jpeg_bytes)
+    result = await _identifier(llm).identify(IdentificationRequest(image=jpeg_bytes))
 
     assert result.candidates == []
     assert result.needs_confirmation is True
@@ -83,4 +99,4 @@ async def test_non_handbag_short_circuits_before_ranking(jpeg_bytes: bytes) -> N
 async def test_rejects_non_image_payload() -> None:
     llm = ScriptedLLM({})
     with pytest.raises(InvalidImageError):
-        await _identifier(llm).identify(b"definitely not an image")
+        await _identifier(llm).identify(IdentificationRequest(image=b"definitely not an image"))
