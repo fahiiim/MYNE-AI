@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from collections import Counter
 from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
 
@@ -22,7 +23,10 @@ from myne.domain.text import contains_phrase, normalize_text
 from myne.integrations.google_vision import GoogleVisionClient
 from myne.integrations.serpapi import SerpApiClient
 from myne.integrations.serper import SerperClient
+from myne.integrations.types import LensMatch
+from myne.services.contracts import IdentificationRequest
 from myne.services.images import ImagePreprocessor, PreparedImage
+from myne.services.progress import IdentificationStage, ProgressCallback, emit
 
 logger = logging.getLogger(__name__)
 
@@ -69,20 +73,22 @@ class BagIdentifier:
         self._serpapi = serpapi
         self._serper = serper
 
-    async def identify(self, image: bytes, *, notes: str | None = None) -> IdentificationResult:
-        prepared = await self._preprocessor.prepare(image)
+    async def identify(
+        self, request: IdentificationRequest, *, progress: ProgressCallback | None = None
+    ) -> IdentificationResult:
+        prepared = await self._preprocessor.prepare(request.image)
         warnings = self._configuration_warnings()
 
         vision_task = asyncio.create_task(
             self._optional("Google Vision", self._vision_evidence(prepared), warnings)
         )
         lens_task = asyncio.create_task(
-            self._optional("Google Lens", self._lens_evidence(prepared), warnings)
+            self._optional("Google Lens", self._lens_evidence(prepared, request), warnings)
         )
         try:
             attributes = await self._llm.generate(
                 system=prompts.ATTRIBUTES_SYSTEM,
-                prompt=prompts.attributes_prompt(notes),
+                prompt=prompts.attributes_prompt(request.notes),
                 schema=BagAttributes,
                 images=[prepared.analysis],
             )
@@ -90,6 +96,11 @@ class BagIdentifier:
             vision_task.cancel()
             lens_task.cancel()
             raise
+        await emit(
+            progress,
+            IdentificationStage.ATTRIBUTES_EXTRACTED,
+            {"attributes": attributes.model_dump(mode="json")},
+        )
         retrieved = [*await vision_task, *await lens_task]
 
         if not attributes.is_handbag and not retrieved:
@@ -98,14 +109,24 @@ class BagIdentifier:
 
         web = await self._optional("Web search", self._web_evidence(attributes), warnings)
         evidence = self._dedupe([*retrieved, *web])[: self._policy.max_evidence]
+        await emit(
+            progress,
+            IdentificationStage.EVIDENCE_COLLECTED,
+            {"total": len(evidence), "by_source": Counter(e.source.value for e in evidence)},
+        )
 
         ranking = await self._llm.generate(
             system=prompts.RANKING_SYSTEM.format(max_candidates=self._policy.max_candidates),
-            prompt=prompts.ranking_prompt(attributes, evidence, notes),
+            prompt=prompts.ranking_prompt(attributes, evidence, request.notes),
             schema=CandidateRanking,
             images=[prepared.analysis],
         )
         candidates = self._ground(ranking.candidates, evidence, attributes)
+        await emit(
+            progress,
+            IdentificationStage.CANDIDATES_RANKED,
+            {"candidates": [c.model_dump(mode="json") for c in candidates]},
+        )
         return self._result(prepared, attributes, candidates, warnings)
 
     async def _vision_evidence(self, prepared: PreparedImage) -> list[Evidence]:
@@ -134,11 +155,24 @@ class BagIdentifier:
         ]
         return evidence
 
-    async def _lens_evidence(self, prepared: PreparedImage) -> list[Evidence]:
+    async def _lens_evidence(
+        self, prepared: PreparedImage, request: IdentificationRequest
+    ) -> list[Evidence]:
         if self._serpapi is None:
             return []
-        image_id = await self._serpapi.upload_image(prepared.search.data, prepared.search.mime_type)
-        matches = await self._serpapi.google_lens(image_id=image_id)
+        matches: list[LensMatch] | None = None
+        if request.image_url:
+            try:
+                matches = await self._serpapi.google_lens(
+                    image_url=request.image_url, query=request.lens_query
+                )
+            except MyneError as exc:
+                logger.info("Lens by URL failed; uploading", extra={"ctx": {"error": exc.detail}})
+        if matches is None:
+            image_id = await self._serpapi.upload_image(
+                prepared.search.data, prepared.search.mime_type
+            )
+            matches = await self._serpapi.google_lens(image_id=image_id, query=request.lens_query)
         return [
             Evidence(
                 source=EvidenceSource.LENS,
