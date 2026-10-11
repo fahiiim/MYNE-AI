@@ -17,18 +17,44 @@ logger = logging.getLogger(__name__)
 _PROBLEM_MEDIA_TYPE = "application/problem+json"
 
 
-def _problem(
-    request: Request, *, status: int, code: str, title: str, detail: str, **extra: Any
-) -> JSONResponse:
-    body = {
+def problem_body(
+    *, status: int, code: str, title: str, detail: str, instance: str, **extra: Any
+) -> dict[str, Any]:
+    return {
         "type": f"urn:myne:error:{code}",
         "title": title,
         "status": status,
         "detail": detail,
-        "instance": request.url.path,
+        "instance": instance,
         "request_id": request_id_ctx.get(),
         **extra,
     }
+
+
+def problem_from_exception(exc: BaseException, *, instance: str) -> dict[str, Any]:
+    if isinstance(exc, MyneError):
+        return problem_body(
+            status=exc.status_code,
+            code=exc.code,
+            title=exc.title,
+            detail=exc.detail,
+            instance=instance,
+        )
+    return problem_body(
+        status=500,
+        code="internal_error",
+        title="Internal server error",
+        detail="An unexpected error occurred.",
+        instance=instance,
+    )
+
+
+def _problem(
+    request: Request, *, status: int, code: str, title: str, detail: str, **extra: Any
+) -> JSONResponse:
+    body = problem_body(
+        status=status, code=code, title=title, detail=detail, instance=request.url.path, **extra
+    )
     return JSONResponse(jsonable_encoder(body), status_code=status, media_type=_PROBLEM_MEDIA_TYPE)
 
 
