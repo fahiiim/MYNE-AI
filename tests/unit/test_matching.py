@@ -22,6 +22,15 @@ def test_listing_matcher(title: str, expected: MatchQuality | None) -> None:
     assert ListingMatcher(BIRKIN_30).evaluate(title) is expected
 
 
+def test_construction_and_variant_are_qualifiers() -> None:
+    identity = BagIdentity(
+        brand="Hermes", model="Kelly", size="28", construction="Sellier", variant="So Black"
+    )
+    matcher = ListingMatcher(identity)
+    assert matcher.evaluate("Hermes Kelly 28 Sellier So Black Box") is MatchQuality.EXACT
+    assert matcher.evaluate("Hermes Kelly 28 Sellier Noir Box") is MatchQuality.PARTIAL
+
+
 def test_brand_aliases_use_whole_words() -> None:
     matcher = ListingMatcher(BagIdentity(brand="Louis Vuitton", model="Neverfull"))
     assert matcher.evaluate("LV Neverfull MM Monogram") is MatchQuality.EXACT
