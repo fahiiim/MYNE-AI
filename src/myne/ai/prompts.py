@@ -15,6 +15,8 @@ monogram, stitching, silhouette, closure). Use null when a field cannot be suppo
 Use the brand's canonical model family name (e.g. "Birkin", "Classic Double Flap", "Neverfull",
 "Lady Dior", "Puzzle").
 `size` is the brand's own size label when determinable ("25", "MM", "Small").
+`apparent_condition` is one of "new", "excellent", "good", "fair" judged only from visible wear
+(corners, handles, scratches, creasing), or null when the photo does not show enough.
 `confidence` is your probability (0-1) that brand AND model_family are both correct.
 Never assess authenticity. {_UNTRUSTED_NOTICE}"""
 
