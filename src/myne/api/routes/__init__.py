@@ -1,10 +1,9 @@
 from fastapi import APIRouter
 
-from myne.api.routes import appraisals, health, identifications, price_reports
+from myne.api.routes import bags, health, identify
 
-api_router = APIRouter(prefix="/v1")
-api_router.include_router(identifications.router)
-api_router.include_router(price_reports.router)
-api_router.include_router(appraisals.router)
+api_router = APIRouter(prefix="/api/v1")
+api_router.include_router(identify.router)
+api_router.include_router(bags.router)
 
 __all__ = ["api_router", "health"]
