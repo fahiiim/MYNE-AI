@@ -39,7 +39,9 @@ class Settings(BaseSettings):
     price_source_timeout_seconds: float = Field(default=60.0, gt=0)
     wayback_max_pages: int = Field(default=3, ge=0, le=10)
 
-    max_upload_bytes: int = Field(default=10 * 1024 * 1024, gt=0)
+    max_image_bytes: int = Field(default=10 * 1024 * 1024, gt=0)
+    image_fetch_timeout_seconds: float = Field(default=15.0, gt=0)
+    sse_keepalive_seconds: float = Field(default=15.0, gt=0)
     auto_confirm_confidence: float = Field(default=0.85, ge=0, le=1)
     auto_confirm_margin: float = Field(default=0.2, ge=0, le=1)
 
