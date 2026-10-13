@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     price_history_months: int = Field(default=6, ge=1, le=24)
     price_cache_ttl_seconds: int = Field(default=6 * 3600, ge=0)
     price_source_timeout_seconds: float = Field(default=60.0, gt=0)
+    history_source_timeout_seconds: float = Field(default=45.0, gt=0)
     wayback_max_pages: int = Field(default=3, ge=0, le=10)
 
     max_image_bytes: int = Field(default=10 * 1024 * 1024, gt=0)
