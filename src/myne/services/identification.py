@@ -23,10 +23,10 @@ from myne.domain.text import contains_phrase, normalize_text
 from myne.integrations.google_vision import GoogleVisionClient
 from myne.integrations.serpapi import SerpApiClient
 from myne.integrations.serper import SerperClient
-from myne.integrations.types import LensMatch
-from myne.services.contracts import IdentificationRequest
+from myne.integrations.types import LensMatch, MarketListing
+from myne.services.contracts import Identification, IdentificationRequest
 from myne.services.images import ImagePreprocessor, PreparedImage
-from myne.services.progress import IdentificationStage, ProgressCallback, emit
+from myne.services.progress import AnalysisStage, ProgressCallback, emit
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ class BagIdentifier:
 
     async def identify(
         self, request: IdentificationRequest, *, progress: ProgressCallback | None = None
-    ) -> IdentificationResult:
+    ) -> Identification:
         prepared = await self._preprocessor.prepare(request.image)
         warnings = self._configuration_warnings()
 
@@ -83,7 +83,7 @@ class BagIdentifier:
             self._optional("Google Vision", self._vision_evidence(prepared), warnings)
         )
         lens_task = asyncio.create_task(
-            self._optional("Google Lens", self._lens_evidence(prepared, request), warnings)
+            self._optional("Google Lens", self._lens_matches(prepared, request), warnings)
         )
         try:
             attributes = await self._llm.generate(
@@ -98,20 +98,32 @@ class BagIdentifier:
             raise
         await emit(
             progress,
-            IdentificationStage.ATTRIBUTES_EXTRACTED,
+            AnalysisStage.ATTRIBUTES_EXTRACTED,
             {"attributes": attributes.model_dump(mode="json")},
         )
-        retrieved = [*await vision_task, *await lens_task]
+        lens_matches = (await lens_task)[: self._policy.max_lens_matches]
+        retrieved = [*await vision_task, *map(self._lens_evidence, lens_matches)]
+        lens_offers = tuple(
+            MarketListing(
+                title=match.title,
+                url=match.url,
+                seller=match.source,
+                price=match.price,
+                condition_hint=None,
+            )
+            for match in lens_matches
+            if match.price is not None
+        )
 
         if not attributes.is_handbag and not retrieved:
             warnings.append("The photo does not appear to show a handbag.")
-            return self._result(prepared, attributes, [], warnings)
+            return Identification(self._result(prepared, attributes, [], warnings))
 
         web = await self._optional("Web search", self._web_evidence(attributes), warnings)
         evidence = self._dedupe([*retrieved, *web])[: self._policy.max_evidence]
         await emit(
             progress,
-            IdentificationStage.EVIDENCE_COLLECTED,
+            AnalysisStage.EVIDENCE_COLLECTED,
             {"total": len(evidence), "by_source": Counter(e.source.value for e in evidence)},
         )
 
@@ -124,10 +136,10 @@ class BagIdentifier:
         candidates = self._ground(ranking.candidates, evidence, attributes)
         await emit(
             progress,
-            IdentificationStage.CANDIDATES_RANKED,
+            AnalysisStage.CANDIDATES_RANKED,
             {"candidates": [c.model_dump(mode="json") for c in candidates]},
         )
-        return self._result(prepared, attributes, candidates, warnings)
+        return Identification(self._result(prepared, attributes, candidates, warnings), lens_offers)
 
     async def _vision_evidence(self, prepared: PreparedImage) -> list[Evidence]:
         if self._vision is None:
@@ -155,34 +167,30 @@ class BagIdentifier:
         ]
         return evidence
 
-    async def _lens_evidence(
+    async def _lens_matches(
         self, prepared: PreparedImage, request: IdentificationRequest
-    ) -> list[Evidence]:
+    ) -> list[LensMatch]:
         if self._serpapi is None:
             return []
-        matches: list[LensMatch] | None = None
         if request.image_url:
             try:
-                matches = await self._serpapi.google_lens(
+                return await self._serpapi.google_lens(
                     image_url=request.image_url, query=request.lens_query
                 )
             except MyneError as exc:
                 logger.info("Lens by URL failed; uploading", extra={"ctx": {"error": exc.detail}})
-        if matches is None:
-            image_id = await self._serpapi.upload_image(
-                prepared.search.data, prepared.search.mime_type
-            )
-            matches = await self._serpapi.google_lens(image_id=image_id, query=request.lens_query)
-        return [
-            Evidence(
-                source=EvidenceSource.LENS,
-                title=match.title,
-                url=match.url,
-                thumbnail_url=match.thumbnail_url,
-                detail=match.source,
-            )
-            for match in matches[: self._policy.max_lens_matches]
-        ]
+        image_id = await self._serpapi.upload_image(prepared.search.data, prepared.search.mime_type)
+        return await self._serpapi.google_lens(image_id=image_id, query=request.lens_query)
+
+    @staticmethod
+    def _lens_evidence(match: LensMatch) -> Evidence:
+        return Evidence(
+            source=EvidenceSource.LENS,
+            title=match.title,
+            url=match.url,
+            thumbnail_url=match.thumbnail_url,
+            detail=match.source,
+        )
 
     async def _web_evidence(self, attributes: BagAttributes) -> list[Evidence]:
         if self._serper is None or not attributes.brand:
@@ -293,9 +301,9 @@ class BagIdentifier:
         return [f"{name} is not configured; accuracy may be reduced." for name in missing]
 
     @staticmethod
-    async def _optional(
-        label: str, operation: Awaitable[list[Evidence]], warnings: list[str]
-    ) -> list[Evidence]:
+    async def _optional[T](
+        label: str, operation: Awaitable[list[T]], warnings: list[str]
+    ) -> list[T]:
         try:
             return await operation
         except MyneError as exc:
