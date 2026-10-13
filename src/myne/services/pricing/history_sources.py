@@ -16,10 +16,10 @@ from decimal import Decimal, InvalidOperation
 from pydantic import ValidationError
 
 from myne.ai import prompts
-from myne.ai.llm import StructuredLLM
+from myne.ai.llm import Effort, StructuredLLM
 from myne.ai.schemas import PriceClaim, PriceClaimExtraction
 from myne.core.errors import MyneError
-from myne.domain.market import RETAIL_HOSTS, host_in
+from myne.domain.market import RETAIL_HOSTS, host_in, is_resale_venue
 from myne.domain.matching import ListingMatcher
 from myne.domain.models import BagIdentity, MarketSegment, Money
 from myne.integrations.serper import SerperClient
@@ -129,6 +129,7 @@ class ReportedPriceHistorySource:
             system=prompts.PRICE_CLAIMS_SYSTEM,
             prompt=prompts.price_claims_prompt(query.identity, rendered, query.today),
             schema=PriceClaimExtraction,
+            effort=Effort.LOW,
         )
 
         prices: list[RawPrice] = []
@@ -142,7 +143,7 @@ class ReportedPriceHistorySource:
 
     async def _snippets(self, query: PriceQuery) -> list[WebResult]:
         identity = query.identity
-        base = f"{identity.brand} {identity.model}"
+        base = identity.model_query()
         tbs = f"qdr:m{query.window.span_in_months}"
         requests = (
             self._serper.search(f"{base} price increase", tbs=tbs),
@@ -183,7 +184,9 @@ class ReportedPriceHistorySource:
         except (ValidationError, InvalidOperation):
             return None
 
-        is_retail = claim.price_type == "retail"
+        is_retail = claim.price_type == "retail" and not is_resale_venue(
+            seller=snippet.source, url=snippet.url
+        )
         return RawPrice(
             source=self.name,
             title=snippet.title,
