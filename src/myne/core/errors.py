@@ -11,6 +11,12 @@ class MyneError(Exception):
         self.detail = detail
 
 
+class InvalidRequestError(MyneError):
+    status_code = 422
+    code = "invalid_request"
+    title = "Invalid request"
+
+
 class InvalidImageError(MyneError):
     status_code = 422
     code = "invalid_image"
