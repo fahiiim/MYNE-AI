@@ -1,17 +1,20 @@
 from collections.abc import Sequence
 
 import openai
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, Omit, omit
 from openai.types.responses import (
     EasyInputMessageParam,
     ResponseInputImageParam,
     ResponseInputMessageContentListParam,
     ResponseInputTextParam,
 )
+from openai.types.shared_params import Reasoning
 from pydantic import BaseModel
 
-from myne.ai.llm import ImageInput
+from myne.ai.llm import Effort, ImageInput
 from myne.core.errors import UpstreamServiceError
+
+_REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
 
 
 class OpenAILLM:
@@ -28,6 +31,7 @@ class OpenAILLM:
         prompt: str,
         schema: type[T],
         images: Sequence[ImageInput] = (),
+        effort: Effort = Effort.DEFAULT,
     ) -> T:
         content: ResponseInputMessageContentListParam = [
             ResponseInputTextParam(type="input_text", text=prompt),
@@ -39,12 +43,18 @@ class OpenAILLM:
             ),
         ]
         message = EasyInputMessageParam(role="user", content=content)
+        reasoning: Reasoning | Omit = (
+            Reasoning(effort="low")
+            if effort is Effort.LOW and self._model.startswith(_REASONING_MODEL_PREFIXES)
+            else omit
+        )
         try:
             response = await self._client.responses.parse(
                 model=self._model,
                 instructions=system,
                 input=[message],
                 text_format=schema,
+                reasoning=reasoning,
             )
         except openai.OpenAIError as exc:
             raise UpstreamServiceError(self.name, type(exc).__name__) from exc
