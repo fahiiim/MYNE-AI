@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     auto_confirm_confidence: float = Field(default=0.85, ge=0, le=1)
     auto_confirm_margin: float = Field(default=0.2, ge=0, le=1)
 
+    http_user_agent: str = "MYNE-AI/0.1.0 (+https://github.com/fahiiim/MYNE-AI)"
     http_timeout_seconds: float = Field(default=20.0, gt=0)
     http_max_attempts: int = Field(default=3, ge=1, le=6)
 
