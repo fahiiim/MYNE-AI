@@ -1,10 +1,12 @@
+import asyncio
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from myne.core.errors import UpstreamServiceError
 from myne.domain.models import BagIdentity, MarketSegment, Money
+from myne.integrations.types import MarketListing
 from myne.services.pricing.service import MarketPriceService, PricingPolicy
-from myne.services.pricing.sources import RawPrice
+from myne.services.pricing.sources import PriceQuery, RawPrice
 from tests.fakes import FailingSource, FixedRateFx, StaticSource
 
 NOW = datetime(2026, 10, 10, 12, tzinfo=UTC)
@@ -83,6 +85,54 @@ async def test_report_aggregates_filters_and_converts() -> None:
     statuses = {s.name: s for s in report.sources}
     assert statuses["ebay"].ok is False
     assert statuses["ebay"].error == "serpapi: HTTP 429"
+
+
+async def test_extra_listings_are_merged_without_polluting_the_cache() -> None:
+    service = _service(
+        StaticSource("google_shopping", [_listing("Chanel Classic Double Flap Medium", "9800")])
+    )
+    lens = [
+        MarketListing(
+            title="Chanel Classic Double Flap Medium Black",
+            url="https://www.therealreal.com/p/classic-flap",
+            seller="The RealReal",
+            price=Money(amount=Decimal("9600"), currency="USD"),
+            condition_hint=None,
+        )
+    ]
+
+    with_lens = await service.report(IDENTITY, currency="USD", extra_listings={"google_lens": lens})
+    without_lens = await service.report(IDENTITY, currency="USD")
+
+    assert {s.name: s.results for s in with_lens.sources} == {
+        "google_shopping": 1,
+        "google_lens": 1,
+    }
+    assert with_lens.current[0].stats.sample_size == 2
+    assert [s.name for s in without_lens.sources] == ["google_shopping"]
+
+
+async def test_per_source_timeout_is_reported_as_a_warning() -> None:
+    class SlowSource:
+        name = "wayback_retail"
+
+        async def collect(self, query: PriceQuery) -> list[RawPrice]:
+            await asyncio.sleep(1)
+            return []
+
+    service = MarketPriceService(
+        sources=[SlowSource(), StaticSource("google_shopping", [])],
+        fx=FixedRateFx({}),
+        policy=PricingPolicy(source_timeouts={"wayback_retail": 0.01}),
+        clock=lambda: NOW,
+    )
+
+    report = await service.report(IDENTITY, currency="USD")
+
+    statuses = {s.name: s for s in report.sources}
+    assert statuses["wayback_retail"].error == "timed out"
+    assert statuses["google_shopping"].ok is True
+    assert "wayback_retail timed out; results may be incomplete." in report.warnings
 
 
 async def test_reports_are_cached_only_when_a_source_succeeds() -> None:
