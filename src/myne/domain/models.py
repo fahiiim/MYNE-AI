@@ -1,7 +1,8 @@
+import re
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, StringConstraints
 
@@ -13,6 +14,13 @@ CurrencyCode = Annotated[
 ]
 Confidence = Annotated[float, Field(ge=0.0, le=1.0)]
 OptionalLabel = Annotated[str | None, StringConstraints(strip_whitespace=True, max_length=120)]
+
+_QUERY_NOISE = re.compile(r"[()\[\]{}/,;:|]|\b(?:cm|mm|inch(?:es)?)\b\.?", re.IGNORECASE)
+
+
+def _query_text(*parts: str | None) -> str:
+    """Search-engine text: drops brackets, separators and size units ('31 cm (PM)' -> '31 PM')."""
+    return dedupe_words(_QUERY_NOISE.sub(" ", " ".join(p for p in parts if p)))
 
 
 class Condition(StrEnum):
@@ -87,10 +95,13 @@ class BagIdentity(BaseModel):
         return dedupe_words(" ".join(p for p in parts if p))
 
     def search_query(self) -> str:
-        return self.display_name
+        return _query_text(self.brand, self.model, self.size, self.variant)
+
+    def model_query(self) -> str:
+        return _query_text(self.brand, self.model)
 
     def descriptive_query(self) -> str:
-        parts = (
+        return _query_text(
             self.brand,
             self.model,
             self.size,
@@ -99,7 +110,6 @@ class BagIdentity(BaseModel):
             self.material,
             self.color,
         )
-        return dedupe_words(" ".join(p for p in parts if p))
 
     def cache_key(self) -> str:
         fields = (
@@ -218,14 +228,63 @@ class Valuation(BaseModel):
     gain_percent: float | None
 
 
-class BagAppraisal(BaseModel):
-    bag: BagIdentity
-    valuation: Valuation
-    report: PriceReport
+class AnalysisMode(StrEnum):
+    IMAGE = "image"
+    IMAGE_WITH_DETAILS = "image_with_details"
+    DETAILS = "details"
 
 
-class ImageAppraisal(BaseModel):
-    identification: IdentificationResult
-    bag: BagIdentity | None = Field(description="Top candidate that was priced, if any.")
+class AnalysisInput(BaseModel):
+    """Canonical form of whatever JSON the caller sent."""
+
+    image_url: str | None = None
+    user_id: str = "anonymous"
+    brand: str | None = None
+    model: str | None = None
+    condition: str | None = None
+    size: str | None = None
+    leather: str | None = None
+    color: list[str] = Field(default_factory=list)
+    hardware: str | None = None
+    construction: str | None = None
+    special_variant: str | None = None
+    purchase_price: Amount | None = None
+    currency: CurrencyCode | None = None
+    search_query: str | None = None
+    notes: str | None = None
+    extra: dict[str, Any] = Field(
+        default_factory=dict, description="Unrecognized fields, keyed by their original path."
+    )
+
+    @property
+    def has_bag_details(self) -> bool:
+        details = (
+            self.brand,
+            self.model,
+            self.condition,
+            self.size,
+            self.leather,
+            self.hardware,
+            self.construction,
+            self.special_variant,
+        )
+        return any(details) or bool(self.color)
+
+
+class BagAnalysis(BaseModel):
+    mode: AnalysisMode
+    user_id: str
+    currency: CurrencyCode
+    generated_at: datetime
+    input: AnalysisInput
+    bag: BagIdentity | None = Field(
+        description="The bag that was priced: identified candidate merged with caller details."
+    )
+    identification: IdentificationResult | None = Field(
+        description="Null in `details` mode, where no image was supplied."
+    )
     valuation: Valuation | None
-    report: PriceReport | None
+    market_prices: list[SegmentPrice]
+    price_history: list[PriceSeries]
+    sources: list[SourceStatus]
+    warnings: list[str]
