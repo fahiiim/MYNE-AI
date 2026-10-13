@@ -42,8 +42,10 @@ Rules:
   without a clear figure.
 - `quote` must be copied verbatim from the snippet and must contain the figure.
 - `amount` is the numeric value of that figure; `currency` is an ISO 4217 code.
-- `price_type` is "retail" for boutique/list prices and price-increase announcements,
-  "resale" for secondary-market prices.
+- `price_type` is "retail" for the brand's boutique/list price, wherever it is quoted
+  (brand site, news, buying guides, price-increase reports). It is "resale" when the snippet
+  offers a specific item for sale by a shop, reseller, marketplace or auction, even if the
+  item is described as new or unused.
 - `as_of_month` (YYYY-MM) only when the snippet states when that price applied; otherwise null.
 - Return an empty list when nothing qualifies. Never estimate or compute prices.
 {_UNTRUSTED_NOTICE}"""
