@@ -5,6 +5,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import HttpUrl
 
 from myne.api.dependencies import AppraisalServiceDep, SettingsDep
+from myne.api.examples import IMAGE_URL_EXAMPLES, USER_ID_EXAMPLES
 from myne.api.schemas import IdentifyResponse
 from myne.api.sse import SSE_HEADERS, stream_with_progress
 from myne.domain.models import IdentificationResult
@@ -12,10 +13,22 @@ from myne.services.progress import ProgressCallback
 
 router = APIRouter(prefix="/identify", tags=["identification"])
 
-ImageUrlQuery = Annotated[HttpUrl, Query(alias="url", description="URL of the image to analyze.")]
+ImageUrlQuery = Annotated[
+    HttpUrl,
+    Query(
+        alias="url",
+        description="URL of the image to analyze.",
+        openapi_examples=IMAGE_URL_EXAMPLES,
+    ),
+]
 UserIdQuery = Annotated[
     str,
-    Query(min_length=1, max_length=128, description="Caller's user id, used for tracing."),
+    Query(
+        min_length=1,
+        max_length=128,
+        description="Caller's user id, used for tracing.",
+        openapi_examples=USER_ID_EXAMPLES,
+    ),
 ]
 
 
