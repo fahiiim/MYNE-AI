@@ -1,8 +1,8 @@
 import asyncio
 import logging
 from collections import defaultdict
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from myne.core.cache import TTLCache
@@ -24,8 +24,9 @@ from myne.domain.models import (
 from myne.domain.money import quantize
 from myne.domain.stats import summarize
 from myne.domain.text import normalize_text
+from myne.integrations.types import MarketListing
 from myne.services.pricing.fx import CurrencyConverter
-from myne.services.pricing.sources import PriceQuery, PriceSource, RawPrice
+from myne.services.pricing.sources import PriceQuery, PriceSource, RawPrice, live_prices
 from myne.services.pricing.window import DateWindow, month_key
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ class PricingPolicy:
     history_months: int = 6
     cache_ttl_seconds: float = 6 * 3600
     source_timeout_seconds: float = 60.0
+    source_timeouts: Mapping[str, float] = field(default_factory=dict)
     min_exact_samples: int = 3
     listings_per_segment: int = 10
 
@@ -46,12 +48,20 @@ class _SourceOutcome:
     prices: list[RawPrice]
 
 
+@dataclass(frozen=True, slots=True)
+class _Collection:
+    query: PriceQuery
+    collected_at: datetime
+    outcomes: tuple[_SourceOutcome, ...]
+
+
 class MarketPriceService:
     """Fans out to every price source, then filters, normalizes and aggregates.
 
     Sources fail independently: a broken provider yields a SourceStatus with an
-    error instead of failing the report. Reports are cached in-process only when
-    at least one source succeeded.
+    error instead of failing the report. Raw source results are cached per bag and
+    search query (only when at least one source succeeded); currency conversion and
+    caller-supplied listings are applied per request on top of the cached data.
     """
 
     def __init__(
@@ -66,23 +76,27 @@ class MarketPriceService:
         self._fx = fx
         self._policy = policy
         self._clock = clock
-        self._cache: TTLCache[str, PriceReport] = TTLCache(
+        self._cache: TTLCache[str, _Collection] = TTLCache(
             ttl_seconds=policy.cache_ttl_seconds, max_entries=512
         )
 
     async def report(
-        self, identity: BagIdentity, *, currency: str, search_query: str | None = None
+        self,
+        identity: BagIdentity,
+        *,
+        currency: str,
+        search_query: str | None = None,
+        extra_listings: Mapping[str, Sequence[MarketListing]] | None = None,
     ) -> PriceReport:
         query_text = (search_query or "").strip() or identity.search_query()
-        key = f"{identity.cache_key()}|{currency}|{normalize_text(query_text)}"
+        collection = await self._collection(identity, query_text)
+        return await self._build(collection, currency, extra_listings or {})
+
+    async def _collection(self, identity: BagIdentity, query_text: str) -> _Collection:
+        key = f"{identity.cache_key()}|{normalize_text(query_text)}"
         if (cached := self._cache.get(key)) is not None:
             return cached
-        report = await self._build(identity, currency, query_text)
-        if any(status.ok for status in report.sources):
-            self._cache.set(key, report)
-        return report
 
-    async def _build(self, identity: BagIdentity, currency: str, query_text: str) -> PriceReport:
         now = self._clock()
         query = PriceQuery(
             identity=identity,
@@ -91,14 +105,36 @@ class MarketPriceService:
             search_query=query_text,
         )
         outcomes = await asyncio.gather(*(self._collect(s, query) for s in self._sources))
+        collection = _Collection(query=query, collected_at=now, outcomes=tuple(outcomes))
+        if any(outcome.status.ok for outcome in outcomes):
+            self._cache.set(key, collection)
+        return collection
 
-        warnings: list[str] = []
+    async def _build(
+        self,
+        collection: _Collection,
+        currency: str,
+        extra_listings: Mapping[str, Sequence[MarketListing]],
+    ) -> PriceReport:
+        query = collection.query
+        outcomes = list(collection.outcomes)
+        for name, listings in extra_listings.items():
+            prices = live_prices(name, listings, query.today)
+            outcomes.append(
+                _SourceOutcome(SourceStatus(name=name, ok=True, results=len(prices)), prices)
+            )
+
+        warnings = [
+            f"{outcome.status.name} timed out; results may be incomplete."
+            for outcome in outcomes
+            if outcome.status.error == "timed out"
+        ]
         raw = [price for outcome in outcomes for price in outcome.prices]
-        observations = await self._normalize(raw, identity, currency, warnings)
+        observations = await self._normalize(raw, query.identity, currency, warnings)
         current = self._current(observations, warnings)
         history = self._history(observations, query.window)
 
-        if not self._sources:
+        if not outcomes:
             warnings.append("No price sources are configured.")
         elif not observations:
             warnings.append("No listings matching this exact bag were found.")
@@ -106,9 +142,9 @@ class MarketPriceService:
             warnings.append("Historical coverage is limited; trend data may be incomplete.")
 
         return PriceReport(
-            identity=identity,
+            identity=query.identity,
             currency=currency,
-            generated_at=now,
+            generated_at=collection.collected_at,
             current=current,
             history=history,
             sources=[outcome.status for outcome in outcomes],
@@ -116,8 +152,9 @@ class MarketPriceService:
         )
 
     async def _collect(self, source: PriceSource, query: PriceQuery) -> _SourceOutcome:
+        timeout = self._policy.source_timeouts.get(source.name, self._policy.source_timeout_seconds)
         try:
-            async with asyncio.timeout(self._policy.source_timeout_seconds):
+            async with asyncio.timeout(timeout):
                 prices = await source.collect(query)
         except TimeoutError:
             return _SourceOutcome(SourceStatus(name=source.name, ok=False, error="timed out"), [])
