@@ -6,7 +6,7 @@ from google.genai import errors as genai_errors
 from google.genai import types
 from pydantic import BaseModel, ValidationError
 
-from myne.ai.llm import ImageInput
+from myne.ai.llm import Effort, ImageInput
 from myne.core.errors import UpstreamServiceError
 
 
@@ -27,6 +27,7 @@ class GeminiLLM:
         prompt: str,
         schema: type[T],
         images: Sequence[ImageInput] = (),
+        effort: Effort = Effort.DEFAULT,
     ) -> T:
         contents: list[Any] = [
             types.Part.from_bytes(data=image.data, mime_type=image.mime_type) for image in images
@@ -37,6 +38,7 @@ class GeminiLLM:
             response_mime_type="application/json",
             response_schema=schema,
             temperature=0.1,
+            thinking_config=self._thinking(effort),
         )
         try:
             response = await self._client.aio.models.generate_content(
@@ -51,6 +53,12 @@ class GeminiLLM:
             return schema.model_validate_json(response.text)
         except ValidationError as exc:
             raise UpstreamServiceError(self.name, "structured output failed validation") from exc
+
+    def _thinking(self, effort: Effort) -> types.ThinkingConfig | None:
+        if effort is not Effort.LOW or "2.5" not in self._model:
+            return None
+        # 2.5 Pro cannot disable thinking; 128 tokens is its minimum budget.
+        return types.ThinkingConfig(thinking_budget=0 if "flash" in self._model else 128)
 
     async def aclose(self) -> None:
         aio_close = getattr(self._client.aio, "aclose", None)
