@@ -20,7 +20,7 @@ from myne.integrations.image_fetcher import ImageFetcher
 from myne.integrations.serpapi import SerpApiClient
 from myne.integrations.serper import SerperClient
 from myne.integrations.wayback import WaybackClient
-from myne.services.appraisal import BagAppraisalService
+from myne.services.analysis import BagAnalysisService
 from myne.services.identification import BagIdentifier, IdentificationPolicy
 from myne.services.images import ImagePreprocessor
 from myne.services.pricing.fx import FrankfurterFx
@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True, slots=True)
 class Container:
     settings: Settings
-    appraisals: BagAppraisalService
+    analysis: BagAnalysisService
     integrations: Mapping[str, bool]
 
 
@@ -97,6 +97,10 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 history_months=settings.price_history_months,
                 cache_ttl_seconds=settings.price_cache_ttl_seconds,
                 source_timeout_seconds=settings.price_source_timeout_seconds,
+                source_timeouts={
+                    WaybackRetailHistorySource.name: settings.history_source_timeout_seconds,
+                    ReportedPriceHistorySource.name: settings.history_source_timeout_seconds,
+                },
             ),
         )
         integrations = {
@@ -114,11 +118,11 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
         )
         yield Container(
             settings=settings,
-            appraisals=BagAppraisalService(
+            analysis=BagAnalysisService(
                 images=images,
                 identifier=identifier,
                 prices=prices,
-                currency=settings.default_currency,
+                default_currency=settings.default_currency,
             ),
             integrations=integrations,
         )
