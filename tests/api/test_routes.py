@@ -1,7 +1,6 @@
 import json
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -9,82 +8,12 @@ from fastapi.testclient import TestClient
 
 from myne.container import Container
 from myne.core.config import Settings
-from myne.core.errors import ImageFetchError
-from myne.domain.models import (
-    BagAttributes,
-    BagCandidate,
-    BagIdentity,
-    IdentificationResult,
-    PriceReport,
-)
 from myne.main import create_app
-from myne.services.appraisal import BagAppraisalService
-from myne.services.contracts import IdentificationRequest
-from myne.services.progress import IdentificationStage, ProgressCallback, emit
+from myne.services.analysis import BagAnalysisService
+from tests.fakes import StubIdentifier, StubImages, StubPrices
 
-IDENTITY = BagIdentity(brand="Louis Vuitton", model="Neverfull", size="MM")
+ANALYZE = "/api/v1/bags/analyze"
 IMAGE_URL = "https://cdn.example.com/bag.jpg"
-
-
-class StubImages:
-    def __init__(self, *, fail: bool = False) -> None:
-        self._fail = fail
-
-    async def fetch(self, url: str) -> bytes:
-        if self._fail:
-            raise ImageFetchError("Image URL returned HTTP 404")
-        return b"image-bytes"
-
-
-class StubIdentifier:
-    def __init__(self) -> None:
-        self.requests: list[IdentificationRequest] = []
-
-    async def identify(
-        self, request: IdentificationRequest, *, progress: ProgressCallback | None = None
-    ) -> IdentificationResult:
-        self.requests.append(request)
-        await emit(progress, IdentificationStage.ATTRIBUTES_EXTRACTED, {"attributes": {}})
-        return IdentificationResult(
-            image_sha256="abc",
-            attributes=BagAttributes(
-                is_handbag=True,
-                brand="Louis Vuitton",
-                model_family="Neverfull",
-                size="MM",
-                material="Monogram canvas",
-                color="Brown",
-                hardware=None,
-                apparent_condition="good",
-                distinctive_features=[],
-                visible_text=[],
-                confidence=0.9,
-            ),
-            candidates=[
-                BagCandidate(identity=IDENTITY, confidence=0.93, rationale="ok", evidence=[])
-            ],
-            needs_confirmation=False,
-            warnings=[],
-        )
-
-
-class StubPrices:
-    def __init__(self) -> None:
-        self.calls: list[tuple[BagIdentity, str | None]] = []
-
-    async def report(
-        self, identity: BagIdentity, *, currency: str, search_query: str | None = None
-    ) -> PriceReport:
-        self.calls.append((identity, search_query))
-        return PriceReport(
-            identity=identity,
-            currency=currency,
-            generated_at=datetime(2026, 10, 11, tzinfo=UTC),
-            current=[],
-            history=[],
-            sources=[],
-            warnings=[],
-        )
 
 
 class Harness:
@@ -98,11 +27,11 @@ class Harness:
         async def factory(app_settings: Settings) -> AsyncIterator[Container]:
             yield Container(
                 settings=app_settings,
-                appraisals=BagAppraisalService(
+                analysis=BagAnalysisService(
                     images=self.images,
                     identifier=self.identifier,
                     prices=self.prices,
-                    currency=app_settings.default_currency,
+                    default_currency=app_settings.default_currency,
                 ),
                 integrations={"llm": True},
             )
@@ -136,86 +65,102 @@ def test_health_and_request_id(client: TestClient) -> None:
     assert response.headers["x-request-id"] == "req-123"
 
 
-def test_identify_upload(client: TestClient, harness: Harness) -> None:
-    response = client.post("/api/v1/identify/upload", params={"url": IMAGE_URL, "user_id": "u-42"})
+def test_image_link_returns_identification_prices_and_history(
+    client: TestClient, harness: Harness
+) -> None:
+    response = client.post(ANALYZE, json={"image_url": IMAGE_URL, "user_id": "u-42"})
+
     assert response.status_code == 200
     body = response.json()
-    assert (body["user_id"], body["image_url"]) == ("u-42", IMAGE_URL)
-    assert body["candidates"][0]["identity"]["model"] == "Neverfull"
-    assert harness.identifier.requests[0].image_url == IMAGE_URL
+    assert (body["mode"], body["user_id"], body["currency"]) == ("image", "u-42", "USD")
+    assert body["bag"]["model"] == "Neverfull"
+    assert body["identification"]["candidates"][0]["identity"]["brand"] == "Louis Vuitton"
+    assert body["valuation"]["condition"] == "good"
+    assert {"market_prices", "price_history", "sources", "warnings"} <= body.keys()
+    assert harness.images.urls == [IMAGE_URL]
 
 
-def test_identify_upload_defaults_user_and_requires_url(client: TestClient) -> None:
-    assert (
-        client.post("/api/v1/identify/upload", params={"url": IMAGE_URL}).json()["user_id"]
-        == "anonymous"
+def test_flexible_backend_payload(client: TestClient, harness: Harness) -> None:
+    response = client.post(
+        ANALYZE,
+        json={
+            "userId": "u-7",
+            "photo": {"url": IMAGE_URL},
+            "bag": {"brandName": "Louis Vuitton", "colour": "Brown"},
+            "pricePaid": "$1,500",
+            "listing_title": "Neverfull MM",
+        },
     )
 
-    missing = client.post("/api/v1/identify/upload")
-    assert missing.status_code == 422
-    assert missing.headers["content-type"].startswith("application/problem+json")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mode"] == "image_with_details"
+    assert body["input"]["extra"] == {"listing_title": "Neverfull MM"}
+    assert body["valuation"]["purchase_price"] == 1500.0
+    assert body["bag"]["color"] == "Brown"
 
 
-def test_identify_stream_emits_stages_then_result(client: TestClient) -> None:
+def test_query_params_are_merged_but_body_wins(client: TestClient, harness: Harness) -> None:
+    response = client.post(
+        ANALYZE,
+        params={"url": IMAGE_URL, "user_id": "from-query"},
+        json={"user_id": "from-body"},
+    )
+    assert response.status_code == 200
+    assert response.json()["user_id"] == "from-body"
+    assert harness.images.urls == [IMAGE_URL]
+
+
+def test_details_only(client: TestClient, harness: Harness) -> None:
+    response = client.post(
+        ANALYZE,
+        json={"brand": "Hermès", "model": "Birkin", "condition": "Excellent", "size": "30"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["mode"], body["identification"]) == ("details", None)
+    assert body["valuation"]["condition"] == "excellent"
+    assert harness.identifier.requests == []
+
+
+@pytest.mark.parametrize("payload", [None, {}, {"brand": "Chanel"}, {"color": "Black"}])
+def test_invalid_requests_return_problem_json(client: TestClient, payload: Any) -> None:
+    response = client.post(ANALYZE, json=payload)
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["type"] == "urn:myne:error:invalid_request"
+
+
+def test_stream_emits_stages_then_result(client: TestClient) -> None:
     with client.stream(
-        "POST", "/api/v1/identify/upload/stream", params={"url": IMAGE_URL}
+        "POST", ANALYZE, params={"stream": "true"}, json={"image_url": IMAGE_URL}
     ) as response:
         assert response.headers["content-type"].startswith("text/event-stream")
         events = _sse_events(response.read().decode())
 
-    assert [name for name, _ in events] == ["stage", "stage", "result"]
-    assert [data["stage"] for _, data in events[:2]] == ["image_fetched", "attributes_extracted"]
-    assert events[-1][1]["user_id"] == "anonymous"
+    assert [name for name, _ in events] == ["stage"] * 4 + ["result"]
+    assert [data["stage"] for _, data in events[:4]] == [
+        "image_fetched",
+        "attributes_extracted",
+        "pricing_started",
+        "pricing_completed",
+    ]
+    assert events[-1][1]["bag"]["model"] == "Neverfull"
 
 
-def test_identify_stream_reports_errors_as_events(settings: Settings) -> None:
+def test_stream_validates_before_streaming(client: TestClient) -> None:
+    response = client.post(ANALYZE, params={"stream": "true"}, json={"brand": "Chanel"})
+    assert response.status_code == 422
+
+
+def test_stream_reports_errors_as_events(settings: Settings) -> None:
     with (
         Harness(images_fail=True).client(settings) as client,
         client.stream(
-            "POST", "/api/v1/identify/upload/stream", params={"url": IMAGE_URL}
+            "POST", ANALYZE, params={"stream": "true"}, json={"image_url": IMAGE_URL}
         ) as response,
     ):
         events = _sse_events(response.read().decode())
 
     assert events == [("error", events[0][1])]
     assert events[0][1]["type"] == "urn:myne:error:image_unreachable"
-
-
-def test_price_by_image(client: TestClient, harness: Harness) -> None:
-    response = client.post(
-        "/api/v1/bags/price/by-image",
-        json={"image_url": IMAGE_URL, "image_search_query": "LV Neverfull", "purchase_price": 1500},
-    )
-    assert response.status_code == 200
-    body = response.json()
-    assert body["bag"]["model"] == "Neverfull"
-    assert body["valuation"]["condition"] == "good"
-    assert body["valuation"]["purchase_price"] == 1500.0
-    assert harness.identifier.requests[0].lens_query == "LV Neverfull"
-
-
-def test_price_bag(client: TestClient, harness: Harness) -> None:
-    response = client.post(
-        "/api/v1/bags/price",
-        json={
-            "brand": "Louis Vuitton",
-            "model": "Neverfull",
-            "condition": "Excellent",
-            "color": ["Brown"],
-            "size": "MM",
-            "image_search_query": "louis vuitton neverfull mm monogram",
-        },
-    )
-    assert response.status_code == 200
-    body = response.json()
-    assert body["valuation"]["condition"] == "excellent"
-    assert body["valuation"]["basis"] == "none"
-    identity, search_query = harness.prices.calls[0]
-    assert identity.variant is None
-    assert search_query == "louis vuitton neverfull mm monogram"
-
-
-def test_price_bag_validation_error(client: TestClient) -> None:
-    response = client.post("/api/v1/bags/price", json={"brand": "Chanel"})
-    assert response.status_code == 422
-    assert response.json()["type"] == "urn:myne:error:validation_error"
