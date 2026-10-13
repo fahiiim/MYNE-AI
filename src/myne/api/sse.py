@@ -11,7 +11,7 @@ from fastapi.encoders import jsonable_encoder
 
 from myne.api.errors import problem_from_exception
 from myne.core.errors import MyneError
-from myne.services.progress import IdentificationStage, ProgressCallback
+from myne.services.progress import AnalysisStage, ProgressCallback
 
 SSE_HEADERS = {
     "Cache-Control": "no-cache",
@@ -43,7 +43,7 @@ async def stream_with_progress(
     """
     queue: asyncio.Queue[object] = asyncio.Queue()
 
-    async def on_progress(stage: IdentificationStage, payload: dict[str, Any]) -> None:
+    async def on_progress(stage: AnalysisStage, payload: dict[str, Any]) -> None:
         await queue.put(format_event("stage", {"stage": stage.value, **payload}))
 
     async def run() -> None:
