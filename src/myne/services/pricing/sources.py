@@ -38,7 +38,7 @@ class PriceSource(Protocol):
     async def collect(self, query: PriceQuery) -> list[RawPrice]: ...
 
 
-def _live_prices(source: str, listings: Iterable[MarketListing], today: date) -> list[RawPrice]:
+def live_prices(source: str, listings: Iterable[MarketListing], today: date) -> list[RawPrice]:
     return [
         RawPrice(
             source=source,
@@ -63,7 +63,7 @@ class GoogleShoppingSource:
 
     async def collect(self, query: PriceQuery) -> list[RawPrice]:
         listings = await self._serpapi.google_shopping(query.search_query)
-        return _live_prices(self.name, listings, query.today)
+        return live_prices(self.name, listings, query.today)
 
 
 class EbayListingsSource:
@@ -74,7 +74,7 @@ class EbayListingsSource:
 
     async def collect(self, query: PriceQuery) -> list[RawPrice]:
         listings = await self._serpapi.ebay(query.search_query)
-        return _live_prices(self.name, listings, query.today)
+        return live_prices(self.name, listings, query.today)
 
 
 class SerperShoppingSource:
@@ -85,4 +85,4 @@ class SerperShoppingSource:
 
     async def collect(self, query: PriceQuery) -> list[RawPrice]:
         listings = await self._serper.shopping(query.search_query)
-        return _live_prices(self.name, listings, query.today)
+        return live_prices(self.name, listings, query.today)
