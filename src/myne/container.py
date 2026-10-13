@@ -8,7 +8,6 @@ from functools import partial
 
 import httpx
 
-from myne import __version__
 from myne.ai.gemini_llm import GeminiLLM
 from myne.ai.llm import FallbackLLM, StructuredLLM
 from myne.ai.openai_llm import OpenAILLM
@@ -58,7 +57,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 timeout=httpx.Timeout(settings.http_timeout_seconds, connect=10.0),
                 limits=httpx.Limits(max_connections=64, max_keepalive_connections=16),
                 follow_redirects=True,
-                headers={"User-Agent": f"MYNE-AI/{__version__}"},
+                headers={"User-Agent": settings.http_user_agent},
             )
         )
         http = HttpClient(raw_http, max_attempts=settings.http_max_attempts)
