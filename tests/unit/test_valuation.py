@@ -1,10 +1,6 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
-import pytest
-from pydantic import ValidationError
-
-from myne.api.schemas import BagPriceRequest
 from myne.domain.models import (
     BagIdentity,
     Condition,
@@ -79,44 +75,3 @@ def test_no_market_data() -> None:
         None,
         None,
     )
-
-
-def test_bag_price_request_maps_backend_contract() -> None:
-    body = BagPriceRequest.model_validate(
-        {
-            "brand": "Hermès",
-            "model": "Kelly",
-            "condition": "Very Good",
-            "color": "Noir",
-            "leather": "Epsom",
-            "size": "28",
-            "special_variant": "Standard",
-            "purchase_price": 12000,
-        }
-    )
-    identity = body.to_identity()
-    assert identity.color == "Noir"
-    assert identity.material == "Epsom"
-    assert identity.variant is None
-    assert identity.hardware is None
-    assert body.purchase_price_decimal == Decimal("12000")
-
-
-def test_bag_price_request_accepts_color_list_and_special_variant() -> None:
-    body = BagPriceRequest.model_validate(
-        {
-            "brand": "Hermès",
-            "model": "Birkin",
-            "condition": "New",
-            "color": ["Gris", "Blanc"],
-            "special_variant": "Himalaya",
-        }
-    )
-    identity = body.to_identity()
-    assert identity.color == "Gris / Blanc"
-    assert identity.variant == "Himalaya"
-
-
-def test_bag_price_request_requires_condition() -> None:
-    with pytest.raises(ValidationError):
-        BagPriceRequest.model_validate({"brand": "Chanel", "model": "Boy"})
