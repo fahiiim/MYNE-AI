@@ -5,40 +5,29 @@ from typing import Any
 _OSTRICH_BIRKIN = (
     "https://upload.wikimedia.org/wikipedia/commons/6/6b/Hermes_Ostrich_Birkin_Bag.jpg"
 )
-_CROC_BIRKIN = "https://upload.wikimedia.org/wikipedia/commons/2/2e/Croc_Birkin_bag.jpg"
 _CHANEL_FLAP = (
     "https://upload.wikimedia.org/wikipedia/commons/1/19/Chanel_CLASSIC_Double_Flap_2.55_.jpg"
 )
 
-IMAGE_URL_EXAMPLES: dict[str, Any] = {
-    "hermes_ostrich_birkin": {"summary": "Hermès Birkin (ostrich)", "value": _OSTRICH_BIRKIN},
-    "chanel_classic_flap": {"summary": "Chanel Classic Double Flap", "value": _CHANEL_FLAP},
-    "hermes_croc_birkin": {"summary": "Hermès Birkin (crocodile)", "value": _CROC_BIRKIN},
-}
-
-USER_ID_EXAMPLES: dict[str, Any] = {
-    "anonymous": {"summary": "Anonymous", "value": "anonymous"},
-    "user": {"summary": "Signed-in user", "value": "user_123"},
-}
-
-PRICE_BY_IMAGE_EXAMPLES: dict[str, Any] = {
-    "with_hint_and_purchase_price": {
-        "summary": "Birkin with search hint and purchase price",
+ANALYZE_EXAMPLES: dict[str, Any] = {
+    "image_only": {
+        "summary": "Image link only (identified via Google Lens)",
+        "value": {"image_url": _CHANEL_FLAP, "user_id": "user_123"},
+    },
+    "image_with_details": {
+        "summary": "Image link plus details and purchase price",
         "value": {
             "image_url": _OSTRICH_BIRKIN,
-            "image_search_query": "Hermes Birkin 30 ostrich",
+            "user_id": "user_123",
+            "brand": "Hermès",
+            "condition": "Excellent",
+            "size": "30",
             "purchase_price": 18000,
+            "image_search_query": "Hermes Birkin 30 ostrich",
         },
     },
-    "image_only": {
-        "summary": "Image URL only",
-        "value": {"image_url": _CHANEL_FLAP},
-    },
-}
-
-BAG_PRICE_EXAMPLES: dict[str, Any] = {
-    "full_payload": {
-        "summary": "Hermès Birkin 30 Togo (all fields)",
+    "details_only": {
+        "summary": "Details only, no image",
         "value": {
             "brand": "Hermès",
             "model": "Birkin",
@@ -50,44 +39,32 @@ BAG_PRICE_EXAMPLES: dict[str, Any] = {
             "construction": "Retourne",
             "special_variant": "Standard",
             "purchase_price": 15000,
-            "image_search_query": "Hermes Birkin 30 Togo Gold",
         },
     },
-    "minimal_string_color": {
-        "summary": "Chanel Classic Flap (required fields, color as string)",
+    "camel_case_nested": {
+        "summary": "camelCase and nested JSON from a backend",
         "value": {
-            "brand": "Chanel",
-            "model": "Classic Double Flap",
-            "condition": "Very Good",
-            "color": "Black",
-            "size": "Medium",
+            "userId": "user_123",
+            "imageUrl": _CHANEL_FLAP,
+            "bag": {
+                "brandName": "Chanel",
+                "modelName": "Classic Double Flap",
+                "colour": "Black, Gold",
+                "condition": "Very Good",
+            },
+            "pricePaid": "$6,800",
         },
     },
-    "special_variant": {
-        "summary": "Hermès Birkin 25 Himalaya (special variant)",
+    "unknown_fields": {
+        "summary": "Unknown fields are kept and passed to the AI as context",
         "value": {
-            "brand": "Hermès",
-            "model": "Birkin",
-            "condition": "New",
-            "size": "25",
-            "leather": "Niloticus crocodile",
-            "special_variant": "Himalaya",
+            "photos": [{"src": _OSTRICH_BIRKIN}],
+            "listing_title": "Authentic Hermes Birkin 30 Ostrich, receipt included",
+            "seller_rating": 4.9,
         },
     },
-    "louis_vuitton": {
-        "summary": "Louis Vuitton Neverfull MM",
-        "value": {
-            "brand": "Louis Vuitton",
-            "model": "Neverfull",
-            "condition": "Good",
-            "color": ["Brown"],
-            "leather": "Monogram canvas",
-            "size": "MM",
-            "purchase_price": 1800,
-        },
-    },
-    "invalid_missing_condition": {
-        "summary": "Invalid: missing condition (expect 422)",
-        "value": {"brand": "Chanel", "model": "Boy"},
+    "invalid": {
+        "summary": "Invalid: no image and no brand/model (expect 422)",
+        "value": {"condition": "Good", "color": "Black"},
     },
 }
