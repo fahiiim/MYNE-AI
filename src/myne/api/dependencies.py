@@ -4,7 +4,7 @@ from fastapi import Depends, Request
 
 from myne.container import Container
 from myne.core.config import Settings
-from myne.services.appraisal import BagAppraisalService
+from myne.services.analysis import BagAnalysisService
 
 
 def get_container(request: Request) -> Container:
@@ -18,9 +18,9 @@ def get_settings(container: ContainerDep) -> Settings:
     return container.settings
 
 
-def get_appraisal_service(container: ContainerDep) -> BagAppraisalService:
-    return container.appraisals
+def get_analysis_service(container: ContainerDep) -> BagAnalysisService:
+    return container.analysis
 
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
-AppraisalServiceDep = Annotated[BagAppraisalService, Depends(get_appraisal_service)]
+AnalysisServiceDep = Annotated[BagAnalysisService, Depends(get_analysis_service)]
