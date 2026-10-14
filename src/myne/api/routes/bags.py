@@ -4,8 +4,8 @@ from fastapi import APIRouter, Body, Query, Request
 from fastapi.responses import StreamingResponse
 
 from myne.api.dependencies import AnalysisServiceDep, SettingsDep
-from myne.api.examples import ANALYZE_EXAMPLES
 from myne.api.request_normalizer import canonical_key, normalize_request
+from myne.api.schemas import BagPriceRequest, ImagePriceRequest
 from myne.api.sse import SSE_HEADERS, stream_with_progress
 from myne.domain.models import BagAnalysis
 from myne.services.progress import ProgressCallback
@@ -22,7 +22,6 @@ AnalyzeBody = Annotated[
             "`photo`, `bag.brandName`, ...). Send an image link, bag details, or both; "
             "at minimum an image link or `brand` + `model`. Unknown fields are kept."
         ),
-        openapi_examples=ANALYZE_EXAMPLES,
     ),
 ]
 StreamQuery = Annotated[
@@ -74,3 +73,27 @@ async def analyze_bag(
         media_type="text/event-stream",
         headers=SSE_HEADERS,
     )
+
+
+@router.post(
+    "/price/by-image",
+    response_model=BagAnalysis,
+    summary="Identify a handbag from an image URL, then price it",
+)
+async def price_by_image(
+    analysis: AnalysisServiceDep,
+    body: ImagePriceRequest,
+) -> BagAnalysis:
+    return await analysis.analyze(body.to_input())
+
+
+@router.post(
+    "/price",
+    response_model=BagAnalysis,
+    summary="Price a handbag from its details",
+)
+async def price_bag(
+    analysis: AnalysisServiceDep,
+    body: BagPriceRequest,
+) -> BagAnalysis:
+    return await analysis.analyze(body.to_input())
