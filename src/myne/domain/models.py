@@ -80,14 +80,14 @@ class BagAttributes(BaseModel):
 class BagIdentity(BaseModel):
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
-    brand: str = Field(min_length=1, max_length=80, examples=["Hermès"])
-    model: str = Field(min_length=1, max_length=120, examples=["Birkin"])
-    size: OptionalLabel = Field(default=None, examples=["30"])
-    material: OptionalLabel = Field(default=None, examples=["Togo leather"])
-    color: OptionalLabel = Field(default=None, examples=["Gold"])
-    hardware: OptionalLabel = Field(default=None, examples=["Gold hardware"])
-    construction: OptionalLabel = Field(default=None, examples=["Sellier"])
-    variant: OptionalLabel = Field(default=None, examples=["Himalaya"])
+    brand: str = Field(min_length=1, max_length=80)
+    model: str = Field(min_length=1, max_length=120)
+    size: OptionalLabel = None
+    material: OptionalLabel = None
+    color: OptionalLabel = None
+    hardware: OptionalLabel = None
+    construction: OptionalLabel = None
+    variant: OptionalLabel = None
 
     @property
     def display_name(self) -> str:
