@@ -153,6 +153,87 @@ def test_stream_validates_before_streaming(client: TestClient) -> None:
     assert response.status_code == 422
 
 
+def test_identify_upload(client: TestClient, harness: Harness) -> None:
+    response = client.post("/api/v1/identify/upload", params={"url": IMAGE_URL, "user_id": "u-42"})
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["user_id"], body["image_url"]) == ("u-42", IMAGE_URL)
+    assert body["candidates"][0]["identity"]["model"] == "Neverfull"
+    assert harness.prices.calls == []
+
+
+def test_identify_upload_defaults_user_and_requires_url(client: TestClient) -> None:
+    body = client.post("/api/v1/identify/upload", params={"url": IMAGE_URL}).json()
+    assert body["user_id"] == "anonymous"
+
+    missing = client.post("/api/v1/identify/upload")
+    assert missing.status_code == 422
+    assert missing.headers["content-type"].startswith("application/problem+json")
+
+
+def test_identify_stream_emits_stages_then_result(client: TestClient) -> None:
+    with client.stream(
+        "POST", "/api/v1/identify/upload/stream", params={"url": IMAGE_URL}
+    ) as response:
+        assert response.headers["content-type"].startswith("text/event-stream")
+        events = _sse_events(response.read().decode())
+
+    assert [name for name, _ in events] == ["stage", "stage", "result"]
+    assert [data["stage"] for _, data in events[:2]] == ["image_fetched", "attributes_extracted"]
+    assert events[-1][1]["user_id"] == "anonymous"
+
+
+def test_price_by_image(client: TestClient, harness: Harness) -> None:
+    response = client.post(
+        "/api/v1/bags/price/by-image",
+        json={"image_url": IMAGE_URL, "image_search_query": "LV Neverfull", "purchase_price": 1500},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mode"] == "image"
+    assert body["bag"]["model"] == "Neverfull"
+    assert body["valuation"]["purchase_price"] == 1500.0
+    assert harness.identifier.requests[0].lens_query == "LV Neverfull"
+    assert harness.prices.calls[0]["search_query"] == "LV Neverfull"
+
+
+def test_price_bag(client: TestClient, harness: Harness) -> None:
+    response = client.post(
+        "/api/v1/bags/price",
+        json={
+            "brand": "Louis Vuitton",
+            "model": "Neverfull",
+            "condition": "Excellent",
+            "color": "Brown",
+            "size": "MM",
+            "special_variant": "Standard",
+            "image_search_query": "louis vuitton neverfull mm monogram",
+        },
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["mode"], body["identification"]) == ("details", None)
+    assert body["valuation"]["condition"] == "excellent"
+    assert body["bag"]["color"] == "Brown"
+    assert body["bag"]["variant"] is None
+    assert harness.prices.calls[0]["search_query"] == "louis vuitton neverfull mm monogram"
+    assert harness.identifier.requests == []
+
+
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        ("/api/v1/bags/price", {"brand": "Chanel", "model": "Boy"}),
+        ("/api/v1/bags/price/by-image", {"image_search_query": "Chanel"}),
+        ("/api/v1/bags/price/by-image", {"image_url": "not a url"}),
+    ],
+)
+def test_contract_validation_errors(client: TestClient, path: str, payload: Any) -> None:
+    response = client.post(path, json=payload)
+    assert response.status_code == 422
+    assert response.json()["type"] == "urn:myne:error:validation_error"
+
+
 def test_stream_reports_errors_as_events(settings: Settings) -> None:
     with (
         Harness(images_fail=True).client(settings) as client,
