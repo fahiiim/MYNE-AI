@@ -13,6 +13,7 @@ from myne.domain.models import (
     BagAnalysis,
     BagIdentity,
     Condition,
+    IdentificationResult,
     PriceReport,
     Valuation,
 )
@@ -97,6 +98,16 @@ class BagAnalysisService:
             sources=report.sources if report else [],
             warnings=[*warnings, *(report.warnings if report else [])],
         )
+
+    async def identify(
+        self,
+        image_url: str,
+        *,
+        search_query: str | None = None,
+        progress: ProgressCallback | None = None,
+    ) -> IdentificationResult:
+        request = AnalysisInput(image_url=image_url, search_query=search_query)
+        return (await self._identify(request, progress)).result
 
     async def _identify(
         self, request: AnalysisInput, progress: ProgressCallback | None
