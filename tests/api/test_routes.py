@@ -162,6 +162,53 @@ def test_identify_upload(client: TestClient, harness: Harness) -> None:
     assert harness.prices.calls == []
 
 
+def test_searched_product_structure_in_image_search_api(
+    client: TestClient, harness: Harness
+) -> None:
+    # Test POST /api/v1/identify/search with JSON body
+    response = client.post(
+        "/api/v1/identify/search", json={"image_url": IMAGE_URL, "user_id": "u-99"}
+    )
+    assert response.status_code == 200
+    body = response.json()
+
+    # Both candidates and products arrays are present and populated
+    assert "candidates" in body
+    assert "products" in body
+    products = body["products"]
+    assert len(products) >= 1
+    item = products[0]
+
+    # Verify all expected fields in the structure
+    assert item["rank"] == 1
+    assert item["brand"] == "Louis Vuitton"
+    assert item["brandId"] == "louis-vuitton"
+    assert item["model"] == "Neverfull"
+    assert item["modelId"] == "louis-vuitton-neverfull"
+    assert item["confidence"] == 93  # Serialized as int percentage
+    assert item["detectedSize"] == "MM"
+    assert item["detectedLeathers"] == "Monogram canvas"
+    assert item["detectedColors"] == ["Brown"]
+    assert item["condition"] == "good"
+    assert item["analysis"] == "ok"
+    assert "imageSearchQuery" in item
+    assert "alternativeColors" in item
+    assert "thumbnailUrl" in item
+    assert "estimatedValueEUR" in item
+    assert "detectedHardware" in item
+    assert "detectedConstruction" in item
+    assert "detectedYear" in item
+    assert "special_variant" in item
+
+    # Test direct /products endpoint returning list/array
+    direct_response = client.post("/api/v1/identify/products", json={"image_url": IMAGE_URL})
+    assert direct_response.status_code == 200
+    direct_list = direct_response.json()
+    assert isinstance(direct_list, list)
+    assert direct_list[0]["brand"] == "Louis Vuitton"
+    assert direct_list[0]["rank"] == 1
+
+
 def test_identify_upload_defaults_user_and_requires_url(client: TestClient) -> None:
     body = client.post("/api/v1/identify/upload", params={"url": IMAGE_URL}).json()
     assert body["user_id"] == "anonymous"

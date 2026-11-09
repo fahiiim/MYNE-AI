@@ -111,7 +111,16 @@ class StubIdentifier:
         self.requests.append(request)
         await emit(progress, AnalysisStage.ATTRIBUTES_EXTRACTED, {"attributes": {}})
         candidates = (
-            [BagCandidate(identity=self._identity, confidence=0.93, rationale="ok", evidence=[])]
+            [
+                BagCandidate(
+                    identity=self._identity,
+                    confidence=0.93,
+                    rationale="ok",
+                    evidence=[],
+                    detectedColors=["Brown"],
+                    condition="good",
+                )
+            ]
             if self._identity
             else []
         )

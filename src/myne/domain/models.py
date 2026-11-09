@@ -4,7 +4,15 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, StringConstraints
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PlainSerializer,
+    StringConstraints,
+    field_serializer,
+    model_validator,
+)
 
 from myne.domain.text import dedupe_words, normalize_text
 
@@ -133,21 +141,155 @@ class Evidence(BaseModel):
     detail: str | None = None
 
 
+def _slugify(text: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return slug or "unknown"
+
+
 class BagCandidate(BaseModel):
-    identity: BagIdentity
-    confidence: Confidence
-    rationale: str
-    evidence: list[Evidence]
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    rank: int = 1
+    brand: str = ""
+    brand_id: str = Field(default="", alias="brandId")
+    model: str = ""
+    model_id: str = Field(default="", alias="modelId")
+    thumbnail_url: str | None = Field(default=None, alias="thumbnailUrl")
+    confidence: float | int = 0
+    estimated_value_eur: int | float | None = Field(default=None, alias="estimatedValueEUR")
+
+    detected_size: str | None = Field(default=None, alias="detectedSize")
+    detected_colors: list[str] = Field(default_factory=list, alias="detectedColors")
+    detected_hardware: str | None = Field(default=None, alias="detectedHardware")
+    detected_leathers: str | None = Field(default=None, alias="detectedLeathers")
+    detected_construction: str | None = Field(default=None, alias="detectedConstruction")
+    detected_year: str | None = Field(default=None, alias="detectedYear")
+    condition: str | None = None
+
+    special_variant: str | None = None
+    alternative_colors: list[str] = Field(default_factory=list, alias="alternativeColors")
+    image_search_query: str = Field(default="", alias="imageSearchQuery")
+
+    analysis: str = ""
+
+    # Preserved for backward compatibility
+    identity: BagIdentity = Field(
+        default_factory=lambda: BagIdentity(brand="Unknown", model="Unknown")
+    )
+    rationale: str = ""
+    evidence: list[Evidence] = Field(default_factory=list)
+
+    def __getattr__(self, name: str) -> Any:
+        mapping = {
+            "brandId": "brand_id",
+            "modelId": "model_id",
+            "thumbnailUrl": "thumbnail_url",
+            "estimatedValueEUR": "estimated_value_eur",
+            "detectedSize": "detected_size",
+            "detectedColors": "detected_colors",
+            "detectedHardware": "detected_hardware",
+            "detectedLeathers": "detected_leathers",
+            "detectedConstruction": "detected_construction",
+            "detectedYear": "detected_year",
+            "alternativeColors": "alternative_colors",
+            "imageSearchQuery": "image_search_query",
+        }
+        if name in mapping:
+            return getattr(self, mapping[name])
+        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
+
+    @field_serializer("confidence", when_used="json")
+    def _serialize_confidence(self, value: float | int) -> int:
+        if isinstance(value, float) and 0.0 <= value <= 1.0:
+            return round(value * 100)
+        return round(value)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _populate_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            data = dict(data)
+            identity = data.get("identity")
+            ident_dict: dict[str, Any] = {}
+            if isinstance(identity, BagIdentity):
+                ident_dict = identity.model_dump()
+            elif isinstance(identity, dict):
+                ident_dict = identity
+
+            if ident_dict:
+                data.setdefault("brand", ident_dict.get("brand", ""))
+                data.setdefault("model", ident_dict.get("model", ""))
+                data.setdefault("detected_size", ident_dict.get("size"))
+                data.setdefault("detected_leathers", ident_dict.get("material"))
+                data.setdefault("detected_hardware", ident_dict.get("hardware"))
+                data.setdefault("detected_construction", ident_dict.get("construction"))
+                data.setdefault("special_variant", ident_dict.get("variant"))
+                if color := ident_dict.get("color"):
+                    data.setdefault(
+                        "detected_colors", [c.strip() for c in color.split("/") if c.strip()]
+                    )
+
+            brand = data.get("brand", "")
+            model = data.get("model", "")
+            if brand and not data.get("brand_id") and not data.get("brandId"):
+                data["brand_id"] = _slugify(brand)
+            if model and not data.get("model_id") and not data.get("modelId"):
+                data["model_id"] = _slugify(f"{brand}-{model}" if brand else model)
+            if not data.get("analysis") and data.get("rationale"):
+                data["analysis"] = data["rationale"]
+            if not data.get("rationale") and data.get("analysis"):
+                data["rationale"] = data["analysis"]
+            if not data.get("image_search_query") and not data.get("imageSearchQuery"):
+                colors = data.get("detected_colors") or data.get("detectedColors") or []
+                query_parts = [
+                    brand,
+                    model,
+                    data.get("detected_size") or data.get("detectedSize"),
+                    data.get("detected_leathers") or data.get("detectedLeathers"),
+                    colors[0] if colors else "",
+                    data.get("detected_hardware") or data.get("detectedHardware"),
+                ]
+                data["image_search_query"] = " ".join(p for p in query_parts if p)
+
+            if not isinstance(identity, BagIdentity) and brand and model:
+                colors = data.get("detected_colors") or data.get("detectedColors") or []
+                color_str = " / ".join(colors) or None
+                data["identity"] = BagIdentity(
+                    brand=brand,
+                    model=model,
+                    size=data.get("detected_size") or data.get("detectedSize"),
+                    material=data.get("detected_leathers") or data.get("detectedLeathers"),
+                    color=color_str,
+                    hardware=data.get("detected_hardware") or data.get("detectedHardware"),
+                    construction=data.get("detected_construction")
+                    or data.get("detectedConstruction"),
+                    variant=data.get("special_variant"),
+                )
+        return data
 
 
 class IdentificationResult(BaseModel):
     image_sha256: str
     attributes: BagAttributes
     candidates: list[BagCandidate]
+    products: list[BagCandidate] = Field(
+        default_factory=list,
+        description="Searched product list in the standardized product structure.",
+    )
     needs_confirmation: bool = Field(
         description="True when the client should ask the user to pick or correct the model."
     )
     warnings: list[str]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _sync_products(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "candidates" in data and not data.get("products"):
+                data["products"] = data["candidates"]
+            elif "products" in data and not data.get("candidates"):
+                data["candidates"] = data["products"]
+        return data
 
 
 class PriceObservation(BaseModel):

@@ -15,4 +15,4 @@ def jpeg_bytes() -> bytes:
 
 @pytest.fixture
 def settings() -> Settings:
-    return Settings(_env_file=None, openai_api_key="test-key")  # type: ignore[call-arg, arg-type]
+    return Settings(_env_file=None, openai_api_key="test-key")

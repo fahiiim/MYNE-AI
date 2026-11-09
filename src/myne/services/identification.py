@@ -1,8 +1,10 @@
 import asyncio
 import logging
+import re
 from collections import Counter
 from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 
 from pydantic import ValidationError
 
@@ -18,6 +20,7 @@ from myne.domain.models import (
     Evidence,
     EvidenceSource,
     IdentificationResult,
+    _slugify,
 )
 from myne.domain.text import contains_phrase, normalize_text
 from myne.integrations.google_vision import GoogleVisionClient
@@ -133,7 +136,7 @@ class BagIdentifier:
             schema=CandidateRanking,
             images=[prepared.analysis],
         )
-        candidates = self._ground(ranking.candidates, evidence, attributes)
+        candidates = self._ground(ranking.candidates, evidence, attributes, lens_offers)
         await emit(
             progress,
             AnalysisStage.CANDIDATES_RANKED,
@@ -213,6 +216,7 @@ class BagIdentifier:
         ranked: Sequence[RankedCandidate],
         evidence: Sequence[Evidence],
         attributes: BagAttributes,
+        lens_offers: Sequence[MarketListing] = (),
     ) -> list[BagCandidate]:
         corpus = [normalize_text(item.title) for item in evidence]
         corpus += [
@@ -225,10 +229,10 @@ class BagIdentifier:
                 identity = BagIdentity(
                     brand=item.brand,
                     model=item.model,
-                    size=item.size,
-                    material=item.material,
-                    color=item.color,
-                    hardware=item.hardware,
+                    size=item.size or attributes.size,
+                    material=item.material or attributes.material,
+                    color=item.color or attributes.color,
+                    hardware=item.hardware or attributes.hardware,
                 )
             except ValidationError:
                 logger.info("Discarding malformed candidate", extra={"ctx": {"brand": item.brand}})
@@ -243,17 +247,62 @@ class BagIdentifier:
             if not self._brand_corroborated(identity.brand, corpus):
                 confidence *= _UNCORROBORATED_BRAND_PENALTY
 
+            thumbnail_url = next(
+                (e.thumbnail_url for e in cited if e.thumbnail_url),
+                next(
+                    (
+                        e.thumbnail_url
+                        for e in evidence
+                        if e.thumbnail_url and identity.brand.lower() in e.title.lower()
+                    ),
+                    None,
+                ),
+            )
+            estimated_eur = _estimate_eur(identity, lens_offers)
+            color_source = identity.color or attributes.color or ""
+            colors = [c.strip() for c in color_source.split("/") if c.strip()]
+            construction = (
+                identity.construction
+                or (attributes.distinctive_features[0] if attributes.distinctive_features else None)
+            )
+            detected_year = _extract_year(
+                *attributes.visible_text, attributes.apparent_condition, item.rationale
+            )
+
+            candidate = BagCandidate(
+                rank=1,
+                brand=identity.brand,
+                brandId=_slugify(identity.brand),
+                model=identity.model,
+                modelId=_slugify(f"{identity.brand}-{identity.model}"),
+                thumbnailUrl=thumbnail_url,
+                confidence=round(confidence, 3),
+                estimatedValueEUR=estimated_eur,
+                detectedSize=identity.size or attributes.size,
+                detectedColors=colors,
+                detectedHardware=identity.hardware or attributes.hardware,
+                detectedLeathers=identity.material or attributes.material,
+                detectedConstruction=construction,
+                detectedYear=detected_year,
+                condition=attributes.apparent_condition,
+                special_variant=identity.variant,
+                alternativeColors=[],
+                imageSearchQuery=identity.descriptive_query(),
+                analysis=item.rationale,
+                identity=identity,
+                rationale=item.rationale,
+                evidence=cited,
+            )
+
             key = identity.cache_key()
             if key not in candidates or candidates[key].confidence < confidence:
-                candidates[key] = BagCandidate(
-                    identity=identity,
-                    confidence=round(confidence, 3),
-                    rationale=item.rationale,
-                    evidence=cited,
-                )
+                candidates[key] = candidate
 
         ordered = sorted(candidates.values(), key=lambda c: c.confidence, reverse=True)
-        return ordered[: self._policy.max_candidates]
+        result_candidates = ordered[: self._policy.max_candidates]
+        for idx, cand in enumerate(result_candidates, start=1):
+            cand.rank = idx
+        return result_candidates
 
     @staticmethod
     def _brand_corroborated(brand: str, corpus: Sequence[str]) -> bool:
@@ -323,3 +372,27 @@ class BagIdentifier:
                 seen.add(key)
                 unique.append(item)
         return unique
+
+
+def _estimate_eur(identity: BagIdentity, offers: Sequence[MarketListing]) -> int | None:
+    for offer in offers:
+        title_lower = offer.title.lower()
+        if (
+            identity.brand.lower() in title_lower
+            and any(tok in title_lower for tok in identity.model.lower().split() if len(tok) > 2)
+            and offer.price is not None
+        ):
+            amount = offer.price.amount
+            if offer.price.currency == "EUR":
+                return round(amount)
+            if offer.price.currency == "USD":
+                return round(amount * Decimal("0.92"))
+            return round(amount)
+    return None
+
+
+def _extract_year(*texts: str | None) -> str | None:
+    for text in texts:
+        if text and (match := re.search(r"\b(19\d{2}|20\d{2})\b", text)):
+            return match.group(1)
+    return None

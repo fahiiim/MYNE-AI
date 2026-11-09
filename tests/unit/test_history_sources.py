@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 
 import pytest
 
@@ -101,6 +102,6 @@ async def test_retail_claims_from_resellers_are_counted_as_resale() -> None:
     )
 
     assert [(p.price.amount, p.segment_hint) for p in prices] == [
-        (3525, MarketSegment.RETAIL),
-        (2095, MarketSegment.RESALE),
+        (Decimal("3525"), MarketSegment.RETAIL),
+        (Decimal("2095"), MarketSegment.RESALE),
     ]

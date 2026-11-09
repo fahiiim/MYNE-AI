@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from myne.api.schemas import BagPriceRequest, ImagePriceRequest
+from myne.domain.models import BagCandidate
 
 
 def test_bag_price_request_maps_backend_contract() -> None:
@@ -52,3 +53,36 @@ def test_image_price_request_treats_empty_query_as_absent() -> None:
     ).to_input()
     assert analysis_input.search_query is None
     assert analysis_input.purchase_price is None
+
+
+def test_searched_product_exact_structure() -> None:
+    payload = {
+        "rank": 1,
+        "brand": "Chanel",
+        "brandId": "brand-id",
+        "model": "Classic Flap",
+        "modelId": "model-id",
+        "thumbnailUrl": "https://example.com/bag.jpg",
+        "confidence": 94,
+        "estimatedValueEUR": 8500,
+        "detectedSize": "Medium",
+        "detectedColors": ["Black"],
+        "detectedHardware": "Gold-tone",
+        "detectedLeathers": "Lambskin",
+        "detectedConstruction": "Quilted",
+        "detectedYear": "2022",
+        "condition": "Very Good",
+        "special_variant": "Classic",
+        "alternativeColors": ["Navy", "Red"],
+        "imageSearchQuery": "Chanel Classic Flap Medium black lambskin gold hardware",
+        "analysis": (
+            "The image appears to show a Chanel Classic Flap bag with "
+            "quilted black lambskin and gold-tone hardware."
+        ),
+    }
+    candidate = BagCandidate.model_validate(payload)
+    dumped = candidate.model_dump(by_alias=True, mode="json")
+    for key, expected_value in payload.items():
+        assert (
+            dumped[key] == expected_value
+        ), f"Mismatch on {key}: {dumped.get(key)} != {expected_value}"
